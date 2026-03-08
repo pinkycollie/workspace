@@ -488,13 +488,13 @@ func removeAccountRelatedDetails(s *pb.ChangeSnapshot) {
 			bundle.RelationKeyLinks.String(),
 			bundle.RelationKeyBacklinks.String(),
 			bundle.RelationKeyMentions.String(),
-			bundle.RelationKeyWorkspaceId.String(),
 			bundle.RelationKeyIdentityProfileLink.String(),
 			bundle.RelationKeyAddedDate.String(),
 			bundle.RelationKeySyncDate.String(),
 			bundle.RelationKeySyncError.String(),
 			bundle.RelationKeySyncStatus.String(),
-			bundle.RelationKeyChatId.String():
+			bundle.RelationKeyChatId.String(),
+			bundle.RelationKeyType.String():
 
 			delete(s.Data.Details.Fields, key)
 		}

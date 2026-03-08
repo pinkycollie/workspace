@@ -10,7 +10,7 @@ import (
 
 	"github.com/anyproto/anytype-heart/core/block/editor/state"
 	"github.com/anyproto/anytype-heart/core/block/restriction"
-	"github.com/anyproto/anytype-heart/core/block/source"
+	"github.com/anyproto/anytype-heart/core/block/source/sourceimpl"
 	"github.com/anyproto/anytype-heart/core/block/template"
 	"github.com/anyproto/anytype-heart/core/domain"
 	"github.com/anyproto/anytype-heart/pkg/lib/bundle"
@@ -48,7 +48,7 @@ type Service interface {
 	CreateSmartBlockFromStateInSpace(ctx context.Context, space clientspace.Space, objectTypeKeys []domain.TypeKey, createState *state.State) (id string, newDetails *domain.Details, err error)
 	AddChatDerivedObject(ctx context.Context, space clientspace.Space, chatObjectId string) (chatId string, err error)
 
-	InstallBundledObjects(ctx context.Context, space clientspace.Space, sourceObjectIds []string, isNewSpace bool) (ids []string, objects []*domain.Details, err error)
+	InstallBundledObjects(ctx context.Context, space clientspace.Space, sourceObjectIds []string) (ids []string, objects []*domain.Details, err error)
 	app.Component
 }
 
@@ -83,6 +83,7 @@ type CreateObjectRequest struct {
 	InternalFlags []*model.InternalFlag
 	TemplateId    string
 	ObjectTypeKey domain.TypeKey
+	UniqueKey     domain.UniqueKey
 }
 
 // CreateObject is high-level method for creating new objects
@@ -116,10 +117,8 @@ func (s *service) createObjectInSpace(
 	}
 	details = internalflag.PutToDetails(details, req.InternalFlags)
 
-	if bundle.HasObjectTypeByKey(req.ObjectTypeKey) {
-		if t := bundle.MustGetType(req.ObjectTypeKey); t.RestrictObjectCreation {
-			return "", nil, errors.Wrap(restriction.ErrRestricted, "creation of this object type is restricted")
-		}
+	if t, e := bundle.GetType(req.ObjectTypeKey); e == nil && t.RestrictObjectCreation && req.ObjectTypeKey != bundle.TypeKeyTemplate {
+		return "", nil, errors.Wrap(restriction.ErrRestricted, "creation of this object type is restricted")
 	}
 
 	switch req.ObjectTypeKey {
@@ -171,6 +170,11 @@ func (s *service) createTemplate(
 	if err != nil {
 		return
 	}
+
+	if req.UniqueKey != nil {
+		createState.SetUniqueKeyInternal(req.UniqueKey.InternalKey())
+	}
+
 	return s.CreateSmartBlockFromStateInSpace(ctx, space, []domain.TypeKey{req.ObjectTypeKey}, createState)
 }
 
@@ -198,6 +202,7 @@ func (s *service) createCommonObject(
 	if err != nil {
 		return
 	}
+
 	return s.CreateSmartBlockFromStateInSpace(ctx, space, []domain.TypeKey{req.ObjectTypeKey}, createState)
 }
 
@@ -219,7 +224,7 @@ func buildDateObject(space clientspace.Space, details *domain.Details) (string, 
 		return "", nil, fmt.Errorf("failed to find Date type to build Date object: %w", err)
 	}
 
-	dateSource := source.NewDate(source.DateSourceParams{
+	dateSource := sourceimpl.NewDate(sourceimpl.DateSourceParams{
 		Id: domain.FullID{
 			ObjectID: dateObject.Id(),
 			SpaceID:  space.Id(),
@@ -227,7 +232,7 @@ func buildDateObject(space clientspace.Space, details *domain.Details) (string, 
 		DateObjectTypeId: typeId,
 	})
 
-	detailsGetter, ok := dateSource.(source.SourceIdEndodedDetails)
+	detailsGetter, ok := dateSource.(sourceimpl.SourceIdEndodedDetails)
 	if !ok {
 		return "", nil, fmt.Errorf("date object does not implement DetailsFromId")
 	}

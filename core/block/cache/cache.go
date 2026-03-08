@@ -22,6 +22,16 @@ type ObjectGetter interface {
 	GetObjectByFullID(ctx context.Context, id domain.FullID) (sb smartblock.SmartBlock, err error)
 }
 
+type ObjectWaitGetterComponent interface {
+	app.Component
+	ObjectWaitGetter
+}
+
+type ObjectWaitGetter interface {
+	WaitAndGetObject(ctx context.Context, objectID string) (sb smartblock.SmartBlock, err error)
+	WaitAndGetObjectByFullID(ctx context.Context, id domain.FullID) (sb smartblock.SmartBlock, err error)
+}
+
 type CachedObjectGetter interface {
 	ObjectGetter
 	TryRemoveFromCache(ctx context.Context, objectId string) (res bool, err error)
@@ -30,6 +40,23 @@ type CachedObjectGetter interface {
 func Do[t any](p ObjectGetter, objectID string, apply func(sb t) error) error {
 	ctx := context.Background()
 	sb, err := p.GetObject(ctx, objectID)
+	if err != nil {
+		return err
+	}
+
+	bb, ok := sb.(t)
+	if !ok {
+		var dummy = new(t)
+		return fmt.Errorf("the interface %T is not implemented in %T", dummy, sb)
+	}
+
+	sb.Lock()
+	defer sb.Unlock()
+	return apply(bb)
+}
+
+func DoWait[t any](p ObjectWaitGetter, ctx context.Context, objectID string, apply func(sb t) error) error {
+	sb, err := p.WaitAndGetObject(ctx, objectID)
 	if err != nil {
 		return err
 	}
@@ -81,9 +108,9 @@ func DoContextFullID[t any](p ObjectGetter, ctx context.Context, id domain.FullI
 
 // DoState2 picks two blocks and perform an action on them. The order of locks is always the same for two ids.
 // It correctly handles the case when two ids are the same.
-func DoState2[t1, t2 any](s ObjectGetter, firstID, secondID string, f func(*state.State, *state.State, t1, t2) error) error {
+func DoState2[t1, t2 any](s ObjectGetter, ctx session.Context, firstID, secondID string, f func(*state.State, *state.State, t1, t2) error) error {
 	if firstID == secondID {
-		return DoState(s, firstID, func(st *state.State, b t1) error {
+		return DoStateCtx(s, ctx, firstID, func(st *state.State, b t1) error {
 			// Check that b satisfies t2
 			b2, ok := any(b).(t2)
 			if !ok {

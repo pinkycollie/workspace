@@ -52,13 +52,13 @@ func TestMakeDataviewContent(t *testing.T) {
 			name: "set by object type",
 			ot: &model.ObjectType{
 				RelationLinks: []*model.RelationLink{
-					{Key: bundle.RelationKeyTasks.String()},
+					{Key: bundle.RelationKeyMentions.String()},
 					{Key: bundle.RelationKeyLinkedProjects.String()},
 					{Key: bundle.RelationKeyAssignee.String()},
 				},
 			},
 			expectedRelations: append(defaultDataviewRelations, []domain.RelationKey{
-				bundle.RelationKeyTasks,
+				bundle.RelationKeyMentions,
 				bundle.RelationKeyLinkedProjects,
 				bundle.RelationKeyAssignee,
 			}...),
@@ -72,7 +72,7 @@ func TestMakeDataviewContent(t *testing.T) {
 				{Key: bundle.RelationKeyAddedDate.String()},
 				{Key: bundle.RelationKeyLastUsedDate.String()},
 			},
-			expectedRelations: append(defaultCollectionRelations, []domain.RelationKey{
+			expectedRelations: append(defaultDataviewRelations, []domain.RelationKey{
 				bundle.RelationKeyAddedDate,
 				bundle.RelationKeyLastUsedDate,
 			}...),

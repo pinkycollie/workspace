@@ -13,13 +13,11 @@ import (
 	"github.com/anyproto/anytype-heart/core/block/cache"
 	"github.com/anyproto/anytype-heart/core/block/editor/basic"
 	"github.com/anyproto/anytype-heart/core/block/object/idresolver"
-	"github.com/anyproto/anytype-heart/core/block/restriction"
 	"github.com/anyproto/anytype-heart/core/domain"
 	"github.com/anyproto/anytype-heart/core/session"
 	"github.com/anyproto/anytype-heart/pb"
 	"github.com/anyproto/anytype-heart/pkg/lib/localstore/objectstore"
 	"github.com/anyproto/anytype-heart/space"
-	"github.com/anyproto/anytype-heart/util/pbtypes"
 	"github.com/anyproto/anytype-heart/util/slice"
 )
 
@@ -46,7 +44,7 @@ type Service interface {
 	SetSpaceInfo(spaceId string, details *domain.Details) error
 	SetWorkspaceDashboardId(ctx session.Context, workspaceId string, id string) (setId string, err error)
 
-	SetIsFavorite(objectId string, isFavorite, createWidget bool) error
+	SetIsFavorite(objectId string, isFavorite bool) error
 	SetIsArchived(objectId string, isArchived bool) error
 	SetListIsFavorite(objectIds []string, isFavorite bool) error
 	SetListIsArchived(objectIds []string, isArchived bool) error
@@ -61,7 +59,6 @@ type service struct {
 	resolver     idresolver.Resolver
 	spaceService space.Service
 	store        objectstore.ObjectStore
-	restriction  restriction.Service
 }
 
 func (s *service) Init(a *app.App) error {
@@ -69,7 +66,6 @@ func (s *service) Init(a *app.App) error {
 	s.resolver = app.MustComponent[idresolver.Resolver](a)
 	s.spaceService = app.MustComponent[space.Service](a)
 	s.store = app.MustComponent[objectstore.ObjectStore](a)
-	s.restriction = app.MustComponent[restriction.Service](a)
 	return nil
 }
 
@@ -114,7 +110,7 @@ func (s *service) ModifyDetailsList(req *pb.RpcObjectListModifyDetailValuesReque
 	for _, objectId := range req.ObjectIds {
 		err := s.ModifyDetails(nil, objectId, func(current *domain.Details) (*domain.Details, error) {
 			for _, op := range req.Operations {
-				if !pbtypes.IsNullValue(op.Set) {
+				if op.Set != nil {
 					// Set operation has higher priority than Add and Remove, because it modifies full value
 					current.Set(domain.RelationKey(op.RelationKey), domain.ValueFromProto(op.Set))
 					continue

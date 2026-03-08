@@ -1,8 +1,9 @@
 package pb
 
 import (
+	"fmt"
+
 	"github.com/globalsign/mgo/bson"
-	"github.com/samber/lo"
 
 	"github.com/anyproto/anytype-heart/core/block/collection"
 	"github.com/anyproto/anytype-heart/core/block/editor/state"
@@ -26,27 +27,25 @@ func NewGalleryImport(service *collection.Service) *GalleryImport {
 	return &GalleryImport{service: service}
 }
 
-func (g *GalleryImport) ProvideCollection(snapshots []*common.Snapshot,
-	widget *common.Snapshot,
+func (g *GalleryImport) ProvideCollection(
+	snapshots *common.SnapshotContext,
 	_ map[string]string,
 	params *pb.RpcObjectImportRequestPbParams,
-	workspaceSnapshot *common.Snapshot,
 	isNewSpace bool,
 ) (collectionsSnapshots []*common.Snapshot, err error) {
 	if isNewSpace {
 		return nil, nil
 	}
 	var widgetObjects []string
-	if widget != nil {
-		widgetObjects = g.getObjectsFromWidgets(widget)
+	if widget := snapshots.GetWidget(); widget != nil {
+		widgetObjects, err = g.getObjectsFromWidgets(widget)
+		if err != nil {
+			return nil, fmt.Errorf("get objects from widgets: %w", err)
+		}
 	}
-	var (
-		icon     string
-		fileKeys []*pb.ChangeFileKeys
-	)
-	if workspaceSnapshot != nil { // we use space icon for import collection
-		icon = workspaceSnapshot.Snapshot.Data.Details.GetString(bundle.RelationKeyIconImage)
-		fileKeys = lo.Filter(workspaceSnapshot.Snapshot.FileKeys, func(item *pb.ChangeFileKeys, index int) bool { return item.Hash == icon })
+	var icon string
+	if workspace := snapshots.GetWorkspace(); workspace != nil { // we use space icon for import collection
+		icon = workspace.Snapshot.Data.Details.GetString(bundle.RelationKeyIconImage)
 	}
 	collectionName := params.GetCollectionTitle() // collection name should be the name of experience
 	if collectionName == "" {
@@ -54,13 +53,18 @@ func (g *GalleryImport) ProvideCollection(snapshots []*common.Snapshot,
 	}
 	rootCollection := common.NewImportCollection(g.service)
 	if len(widgetObjects) > 0 {
-		collectionsSnapshots, err = g.getWidgetsCollection(collectionName, rootCollection, widgetObjects, icon, fileKeys, widget, collectionsSnapshots)
+		collectionsSnapshots, err = g.getWidgetsCollection(collectionName, rootCollection, widgetObjects, icon, snapshots.GetWidget(), collectionsSnapshots)
 		if err != nil {
 			return nil, err
 		}
 	}
-	objectsIDs := g.getObjectsIDs(snapshots)
-	settings := common.MakeImportCollectionSetting(collectionName, objectsIDs, icon, fileKeys, false, true, true)
+	objectsIDs := g.getObjectsIDs(snapshots.List())
+	settings := common.NewImportCollectionSetting(
+		common.WithCollectionName(collectionName),
+		common.WithTargetObjects(objectsIDs),
+		common.WithIcon(icon),
+		common.WithRelations(),
+	)
 	objectsCollection, err := rootCollection.MakeImportCollection(settings)
 	if err != nil {
 		return nil, err
@@ -73,12 +77,16 @@ func (g *GalleryImport) getWidgetsCollection(collectionName string,
 	rootCollection *common.ImportCollection,
 	widgetObjects []string,
 	icon string,
-	fileKeys []*pb.ChangeFileKeys,
 	widget *common.Snapshot,
 	collectionsSnapshots []*common.Snapshot,
 ) ([]*common.Snapshot, error) {
 	widgetCollectionName := collectionName + widgetCollectionPattern
-	settings := common.MakeImportCollectionSetting(widgetCollectionName, widgetObjects, icon, fileKeys, false, false, true)
+	settings := common.NewImportCollectionSetting(
+		common.WithCollectionName(widgetCollectionName),
+		common.WithTargetObjects(widgetObjects),
+		common.WithIcon(icon),
+		common.WithRelations(),
+	)
 	widgetsCollectionSnapshot, err := rootCollection.MakeImportCollection(settings)
 	if err != nil {
 		return nil, err
@@ -92,10 +100,13 @@ func (g *GalleryImport) getWidgetsCollection(collectionName string,
 	return collectionsSnapshots, nil
 }
 
-func (g *GalleryImport) getObjectsFromWidgets(widgetSnapshot *common.Snapshot) []string {
-	widgetState := state.NewDocFromSnapshot("", widgetSnapshot.Snapshot.ToProto()).(*state.State)
+func (g *GalleryImport) getObjectsFromWidgets(widgetSnapshot *common.Snapshot) ([]string, error) {
+	widgetState, err := state.NewDocFromSnapshot("", widgetSnapshot.Snapshot.ToProto())
+	if err != nil {
+		return nil, fmt.Errorf("doc from snapshot: %w", err)
+	}
 	var objectsInWidget []string
-	err := widgetState.Iterate(func(b simple.Block) (isContinue bool) {
+	err = widgetState.Iterate(func(b simple.Block) (isContinue bool) {
 		if link := b.Model().GetLink(); link != nil && link.TargetBlockId != "" {
 			if widgets.IsPredefinedWidgetTargetId(link.TargetBlockId) {
 				return true
@@ -108,9 +119,9 @@ func (g *GalleryImport) getObjectsFromWidgets(widgetSnapshot *common.Snapshot) [
 		return true
 	})
 	if err != nil {
-		return nil
+		return nil, nil
 	}
-	return objectsInWidget
+	return objectsInWidget, nil
 }
 
 func (g *GalleryImport) addCollectionWidget(widgetSnapshot *common.Snapshot, collectionID string) {

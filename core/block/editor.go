@@ -365,6 +365,40 @@ func (s *Service) CreateAndUploadFile(
 }
 
 func (s *Service) UploadFile(ctx context.Context, spaceId string, req FileUploadRequest) (objectId string, fileType model.BlockContentFileType, details *domain.Details, err error) {
+	objectId, _, fileType, details, err = s.uploadFileInternal(ctx, spaceId, req)
+	return
+}
+
+// PreloadFile uploads file content without creating an object, returns preloadId for later use
+func (s *Service) PreloadFile(ctx context.Context, spaceId string, req FileUploadRequest) (preloadId string, fileType model.BlockContentFileType, err error) {
+	_, preloadId, fileType, _, err = s.uploadFileInternal(ctx, spaceId, req)
+	return
+}
+
+// CreateObjectFromPreloadedFile creates a file object from a previously preloaded file
+func (s *Service) CreateObjectFromPreloadedFile(ctx context.Context, spaceId string, preloadFileId string, req FileUploadRequest) (objectId string, fileType model.BlockContentFileType, details *domain.Details, err error) {
+	// Set the preloadFileId in the uploader
+	upl := s.fileUploaderService.NewUploader(spaceId, req.ObjectOrigin)
+	upl.SetStyle(req.Style)
+	upl.SetAdditionalDetails(domain.NewDetailsFromProto(req.Details))
+	upl.SetPreloadId(preloadFileId)
+
+	if req.Type != model.BlockContentFile_None {
+		upl.SetType(req.Type)
+	}
+	if req.ImageKind != model.ImageKind_Basic {
+		upl.SetImageKind(req.ImageKind)
+	}
+
+	res := upl.Upload(ctx)
+	if res.Err != nil {
+		return "", 0, nil, res.Err
+	}
+
+	return res.FileObjectId, res.Type, res.FileObjectDetails, nil
+}
+
+func (s *Service) uploadFileInternal(ctx context.Context, spaceId string, req FileUploadRequest) (objectId string, preloadId string, fileType model.BlockContentFileType, details *domain.Details, err error) {
 	upl := s.fileUploaderService.NewUploader(spaceId, req.ObjectOrigin)
 	if req.DisableEncryption {
 		log.Errorf("DisableEncryption is deprecated and has no effect")
@@ -386,12 +420,54 @@ func (s *Service) UploadFile(ctx context.Context, spaceId string, req FileUpload
 	if req.ImageKind != model.ImageKind_Basic {
 		upl.SetImageKind(req.ImageKind)
 	}
+	if req.PreloadOnly {
+		preloadId, err = upl.Preload(ctx)
+		return "", preloadId, 0, nil, err
+	}
 	res := upl.Upload(ctx)
 	if res.Err != nil {
-		return "", 0, nil, res.Err
+		return "", "", 0, nil, res.Err
 	}
 
-	return res.FileObjectId, res.Type, res.FileObjectDetails, nil
+	return res.FileObjectId, "", res.Type, res.FileObjectDetails, nil
+}
+
+// DiscardPreloadedFile discards a preloaded file that won't be used
+func (s *Service) DiscardPreloadedFile(ctx context.Context, spaceId string, fileId string) error {
+	// First check if an object already exists for this file
+	fullFileId := domain.FullFileId{
+		SpaceId: spaceId,
+		FileId:  domain.FileId(fileId),
+	}
+
+	// Check if a file object already exists
+	_, _, err := s.fileObjectService.GetObjectDetailsByFileId(fullFileId)
+	if err == nil {
+		// Object exists, don't discard the file as it's being used
+		return fmt.Errorf("cannot discard file: object already exists for this file")
+	}
+
+	// Try to get the preloaded result (fileId is the same as preloadId)
+	if preloadResult, ok := s.fileUploaderService.GetPreloadResult(fileId); ok {
+		// Discard the batch if it hasn't been committed yet
+		if preloadResult.Batch != nil {
+			if err := preloadResult.Batch.Discard(); err != nil {
+				return fmt.Errorf("failed to discard preloaded batch: %w", err)
+			}
+		}
+		// Remove the preload result from memory
+		s.fileUploaderService.RemovePreloadResult(fileId)
+		return nil
+	}
+
+	// If no preload result found, try to remove the file from storage using fileoffloader
+	// This handles the case where the file was already committed
+	_, err = s.fileOffloader.FileOffloadRaw(ctx, fullFileId)
+	if err != nil {
+		return fmt.Errorf("failed to discard preloaded file: %w", err)
+	}
+
+	return nil
 }
 
 func (s *Service) DropFiles(req pb.RpcFileDropRequest) (err error) {
@@ -543,8 +619,8 @@ type Movable interface {
 	basic.Restrictionable
 }
 
-func (s *Service) MoveBlocks(req pb.RpcBlockListMoveToExistingObjectRequest) error {
-	return cache.DoState2(s, req.ContextId, req.TargetContextId, func(srcState, destState *state.State, sb, tb Movable) error {
+func (s *Service) MoveBlocks(ctx session.Context, req pb.RpcBlockListMoveToExistingObjectRequest) error {
+	return cache.DoState2(s, ctx, req.ContextId, req.TargetContextId, func(srcState, destState *state.State, sb, tb Movable) error {
 		if err := sb.Restrictions().Object.Check(model.Restrictions_Blocks); err != nil {
 			return restriction.ErrRestricted
 		}
@@ -657,12 +733,34 @@ func (s *Service) TableColumnListFill(ctx session.Context, req pb.RpcBlockTableC
 	return err
 }
 
-func (s *Service) CreateWidgetBlock(ctx session.Context, req *pb.RpcBlockCreateWidgetRequest) (string, error) {
+func (s *Service) CreateWidgetBlock(ctx session.Context, req *pb.RpcBlockCreateWidgetRequest, checkDuplicatedTarget bool) (string, error) {
 	var id string
 	err := cache.DoStateCtx(s, ctx, req.ContextId, func(st *state.State, w widget.Widget) error {
+		if checkDuplicatedTarget && widgetHasBlock(st, req.Block) {
+			return nil
+		}
 		var err error
 		id, err = w.CreateBlock(st, req)
 		return err
 	})
 	return id, err
+}
+
+// widgetHasBlock checks if widget has block with same targetBlockId as in provided block
+func widgetHasBlock(st *state.State, block *model.Block) (found bool) {
+	if block == nil || block.GetLink() == nil {
+		return false
+	}
+	targetBlockId := block.GetLink().TargetBlockId
+	// nolint:errcheck
+	_ = st.Iterate(func(b simple.Block) (isContinue bool) {
+		if l := b.Model().GetLink(); l != nil {
+			if l.GetTargetBlockId() == targetBlockId {
+				found = true
+				return false
+			}
+		}
+		return true
+	})
+	return found
 }

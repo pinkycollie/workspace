@@ -20,6 +20,7 @@ import (
 	"github.com/anyproto/anytype-heart/space/spacecore"
 	"github.com/anyproto/anytype-heart/space/spacecore/storage"
 	"github.com/anyproto/anytype-heart/space/spacecore/storage/anystorage"
+	"github.com/anyproto/anytype-heart/space/spacedomain"
 	"github.com/anyproto/anytype-heart/space/spaceinfo"
 	"github.com/anyproto/anytype-heart/space/techspace"
 )
@@ -28,10 +29,11 @@ type SpaceFactory interface {
 	app.Component
 	CreatePersonalSpace(ctx context.Context, metadata []byte) (sp spacecontroller.SpaceController, err error)
 	NewPersonalSpace(ctx context.Context, metadata []byte) (spacecontroller.SpaceController, error)
-	CreateShareableSpace(ctx context.Context, id string) (sp spacecontroller.SpaceController, err error)
+	CreateShareableSpace(ctx context.Context, id string, desc *spaceinfo.SpaceDescription) (sp spacecontroller.SpaceController, err error)
 	NewShareableSpace(ctx context.Context, id string, info spaceinfo.SpacePersistentInfo) (spacecontroller.SpaceController, error)
 	CreateStreamableSpace(ctx context.Context, privKey crypto.PrivKey, id string, metadata []byte) (spacecontroller.SpaceController, error)
 	NewStreamableSpace(ctx context.Context, id string, info spaceinfo.SpacePersistentInfo, metadata []byte) (spacecontroller.SpaceController, error)
+	CreateActiveSpace(ctx context.Context, id, aclHeadId string) (sp spacecontroller.SpaceController, err error)
 	CreateMarketplaceSpace(ctx context.Context) (sp spacecontroller.SpaceController, err error)
 	CreateAndSetTechSpace(ctx context.Context) (*clientspace.TechSpace, error)
 	LoadAndSetTechSpace(ctx context.Context) (*clientspace.TechSpace, error)
@@ -64,7 +66,7 @@ func (s *spaceFactory) Init(a *app.App) (err error) {
 	s.indexer = app.MustComponent[dependencies.SpaceIndexer](a)
 	s.installer = app.MustComponent[dependencies.BundledObjectsInstaller](a)
 	s.storageService = app.MustComponent[storage.ClientStorage](a)
-	s.personalSpaceId, err = s.spaceCore.DeriveID(context.Background(), spacecore.SpaceType)
+	s.personalSpaceId, err = s.spaceCore.DeriveID(context.Background(), spacedomain.SpaceTypeRegular)
 	if err != nil {
 		return
 	}
@@ -72,7 +74,7 @@ func (s *spaceFactory) Init(a *app.App) (err error) {
 }
 
 func (s *spaceFactory) CreatePersonalSpace(ctx context.Context, metadata []byte) (sp spacecontroller.SpaceController, err error) {
-	coreSpace, err := s.spaceCore.Derive(ctx, spacecore.SpaceType)
+	coreSpace, err := s.spaceCore.Derive(ctx, spacedomain.SpaceTypeRegular)
 	if err != nil {
 		return
 	}
@@ -82,7 +84,7 @@ func (s *spaceFactory) CreatePersonalSpace(ctx context.Context, metadata []byte)
 	}
 	info := spaceinfo.NewSpacePersistentInfo(coreSpace.Id())
 	info.SetAccountStatus(spaceinfo.AccountStatusUnknown)
-	if err := s.techSpace.SpaceViewCreate(ctx, coreSpace.Id(), true, info); err != nil {
+	if err := s.techSpace.SpaceViewCreate(ctx, coreSpace.Id(), true, info, nil); err != nil {
 		if errors.Is(err, techspace.ErrSpaceViewExists) {
 			return s.NewPersonalSpace(ctx, metadata)
 		}
@@ -97,7 +99,7 @@ func (s *spaceFactory) CreatePersonalSpace(ctx context.Context, metadata []byte)
 }
 
 func (s *spaceFactory) NewPersonalSpace(ctx context.Context, metadata []byte) (ctrl spacecontroller.SpaceController, err error) {
-	id, err := s.spaceCore.DeriveID(ctx, spacecore.SpaceType)
+	id, err := s.spaceCore.DeriveID(ctx, spacedomain.SpaceTypeRegular)
 	if err != nil {
 		return nil, err
 	}
@@ -111,20 +113,26 @@ func (s *spaceFactory) NewPersonalSpace(ctx context.Context, metadata []byte) (c
 
 func (s *spaceFactory) CreateAndSetTechSpace(ctx context.Context) (*clientspace.TechSpace, error) {
 	techSpace := techspace.New()
-	techCoreSpace, err := s.spaceCore.Derive(ctx, spacecore.TechSpaceType)
+	techCoreSpace, err := s.spaceCore.Derive(ctx, spacedomain.SpaceTypeTech)
 	if err != nil {
 		return nil, fmt.Errorf("derive tech space: %w", err)
 	}
+	kvObserver := techCoreSpace.KeyValueObserver()
 	deps := clientspace.TechSpaceDeps{
-		CommonSpace:     techCoreSpace,
-		ObjectFactory:   s.objectFactory,
-		AccountService:  s.accountService,
-		PersonalSpaceId: s.personalSpaceId,
-		Indexer:         s.indexer,
-		Installer:       s.installer,
-		TechSpace:       techSpace,
+		CommonSpace:      techCoreSpace,
+		ObjectFactory:    s.objectFactory,
+		AccountService:   s.accountService,
+		PersonalSpaceId:  s.personalSpaceId,
+		Indexer:          s.indexer,
+		Installer:        s.installer,
+		TechSpace:        techSpace,
+		KeyValueObserver: kvObserver,
 	}
-	ts := clientspace.NewTechSpace(deps)
+	ts, err := clientspace.NewTechSpace(deps)
+	if err != nil {
+		return nil, fmt.Errorf("build tech space: %w", err)
+	}
+
 	s.techSpace = ts
 	s.app = s.app.ChildApp()
 	s.app.Register(s.techSpace)
@@ -138,7 +146,7 @@ func (s *spaceFactory) CreateAndSetTechSpace(ctx context.Context) (*clientspace.
 
 func (s *spaceFactory) LoadAndSetTechSpace(ctx context.Context) (*clientspace.TechSpace, error) {
 	techSpace := techspace.New()
-	id, err := s.spaceCore.DeriveID(ctx, spacecore.TechSpaceType)
+	id, err := s.spaceCore.DeriveID(ctx, spacedomain.SpaceTypeTech)
 	if err != nil {
 		return nil, fmt.Errorf("derive tech space id: %w", err)
 	}
@@ -146,16 +154,21 @@ func (s *spaceFactory) LoadAndSetTechSpace(ctx context.Context) (*clientspace.Te
 	if err != nil {
 		return nil, fmt.Errorf("derive tech space: %w", err)
 	}
+	kvObserver := techCoreSpace.KeyValueObserver()
 	deps := clientspace.TechSpaceDeps{
-		CommonSpace:     techCoreSpace,
-		ObjectFactory:   s.objectFactory,
-		AccountService:  s.accountService,
-		PersonalSpaceId: s.personalSpaceId,
-		Indexer:         s.indexer,
-		Installer:       s.installer,
-		TechSpace:       techSpace,
+		CommonSpace:      techCoreSpace,
+		ObjectFactory:    s.objectFactory,
+		AccountService:   s.accountService,
+		PersonalSpaceId:  s.personalSpaceId,
+		Indexer:          s.indexer,
+		Installer:        s.installer,
+		TechSpace:        techSpace,
+		KeyValueObserver: kvObserver,
 	}
-	ts := clientspace.NewTechSpace(deps)
+	ts, err := clientspace.NewTechSpace(deps)
+	if err != nil {
+		return nil, fmt.Errorf("build tech space: %w", err)
+	}
 	s.techSpace = ts
 	s.app = s.app.ChildApp()
 	s.app.Register(s.techSpace)
@@ -163,7 +176,10 @@ func (s *spaceFactory) LoadAndSetTechSpace(ctx context.Context) (*clientspace.Te
 	if err != nil {
 		return nil, fmt.Errorf("run tech space: %w", err)
 	}
-
+	err = s.indexer.ReindexSpace(ts)
+	if err != nil {
+		return nil, fmt.Errorf("reindex tech space: %w", err)
+	}
 	return ts, nil
 }
 
@@ -184,7 +200,7 @@ func (s *spaceFactory) CreateInvitingSpace(ctx context.Context, id, aclHeadId st
 	info := spaceinfo.NewSpacePersistentInfo(id)
 	info.SetAclHeadId(aclHeadId).SetAccountStatus(spaceinfo.AccountStatusJoining)
 	if !exists {
-		if err := s.techSpace.SpaceViewCreate(ctx, id, true, info); err != nil {
+		if err := s.techSpace.SpaceViewCreate(ctx, id, true, info, nil); err != nil {
 			return nil, err
 		}
 	}
@@ -196,7 +212,27 @@ func (s *spaceFactory) CreateInvitingSpace(ctx context.Context, id, aclHeadId st
 	return ctrl, err
 }
 
-func (s *spaceFactory) CreateShareableSpace(ctx context.Context, id string) (sp spacecontroller.SpaceController, err error) {
+func (s *spaceFactory) CreateActiveSpace(ctx context.Context, id, aclHeadId string) (sp spacecontroller.SpaceController, err error) {
+	exists, err := s.techSpace.SpaceViewExists(ctx, id)
+	if err != nil {
+		return
+	}
+	info := spaceinfo.NewSpacePersistentInfo(id)
+	info.SetAclHeadId(aclHeadId).SetAccountStatus(spaceinfo.AccountStatusActive)
+	if !exists {
+		if err := s.techSpace.SpaceViewCreate(ctx, id, true, info, nil); err != nil {
+			return nil, err
+		}
+	}
+	ctrl, err := shareablespace.NewSpaceController(id, info, s.app)
+	if err != nil {
+		return nil, err
+	}
+	err = ctrl.Start(ctx)
+	return ctrl, err
+}
+
+func (s *spaceFactory) CreateShareableSpace(ctx context.Context, id string, spaceDesc *spaceinfo.SpaceDescription) (sp spacecontroller.SpaceController, err error) {
 	coreSpace, err := s.spaceCore.Get(ctx, id)
 	if err != nil {
 		return
@@ -207,7 +243,7 @@ func (s *spaceFactory) CreateShareableSpace(ctx context.Context, id string) (sp 
 	}
 	info := spaceinfo.NewSpacePersistentInfo(id)
 	info.SetAccountStatus(spaceinfo.AccountStatusUnknown)
-	if err := s.techSpace.SpaceViewCreate(ctx, id, true, info); err != nil {
+	if err := s.techSpace.SpaceViewCreate(ctx, id, true, info, spaceDesc); err != nil {
 		return nil, err
 	}
 	ctrl, err := shareablespace.NewSpaceController(id, info, s.app)
@@ -226,7 +262,7 @@ func (s *spaceFactory) CreateStreamableSpace(ctx context.Context, privKey crypto
 	info := spaceinfo.NewSpacePersistentInfo(id)
 	info.SetAccountStatus(spaceinfo.AccountStatusUnknown).
 		SetEncodedKey(encodedKey)
-	if err := s.techSpace.SpaceViewCreate(ctx, id, false, info); err != nil {
+	if err := s.techSpace.SpaceViewCreate(ctx, id, false, info, nil); err != nil {
 		return nil, err
 	}
 	return s.NewStreamableSpace(ctx, id, info, metadata)

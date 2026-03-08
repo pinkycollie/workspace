@@ -9,17 +9,23 @@ import (
 
 	"github.com/anyproto/any-sync/app"
 	"github.com/anyproto/any-sync/commonspace/acl/aclclient"
+	"github.com/anyproto/any-sync/commonspace/object/acl/aclrecordproto"
 	"github.com/anyproto/any-sync/commonspace/object/acl/list"
+	"github.com/anyproto/any-sync/commonspace/object/acl/recordverifier"
 	"github.com/anyproto/any-sync/coordinator/coordinatorclient"
 	"github.com/anyproto/any-sync/coordinator/coordinatorproto"
 	"github.com/anyproto/any-sync/identityrepo/identityrepoproto"
 	"github.com/anyproto/any-sync/nodeconf"
 	"github.com/anyproto/any-sync/util/crypto"
 	"github.com/ipfs/go-cid"
+	"go.uber.org/zap"
 
 	"github.com/anyproto/anytype-heart/core/anytype/account"
 	"github.com/anyproto/anytype-heart/core/domain"
 	"github.com/anyproto/anytype-heart/core/inviteservice"
+	"github.com/anyproto/anytype-heart/core/subscription"
+	"github.com/anyproto/anytype-heart/core/subscription/crossspacesub"
+	"github.com/anyproto/anytype-heart/core/wallet"
 	"github.com/anyproto/anytype-heart/pkg/lib/bundle"
 	"github.com/anyproto/anytype-heart/pkg/lib/logging"
 	"github.com/anyproto/anytype-heart/pkg/lib/pb/model"
@@ -45,7 +51,8 @@ type AccountPermissions struct {
 
 type AclService interface {
 	app.Component
-	GenerateInvite(ctx context.Context, spaceId string) (domain.InviteInfo, error)
+	GenerateInvite(ctx context.Context, spaceId string, inviteType model.InviteType, permissions model.ParticipantPermissions) (domain.InviteInfo, error)
+	ChangeInvite(ctx context.Context, spaceId string, permissions model.ParticipantPermissions) error
 	RevokeInvite(ctx context.Context, spaceId string) error
 	GetCurrentInvite(ctx context.Context, spaceId string) (domain.InviteInfo, error)
 	GetGuestUserInvite(ctx context.Context, spaceId string) (domain.InviteInfo, error)
@@ -82,6 +89,12 @@ type aclService struct {
 	accountService   account.Service
 	coordClient      coordinatorclient.CoordinatorClient
 	identityRepo     identityRepoClient
+	recordVerifier   recordverifier.AcceptorVerifier
+	updater          *aclUpdater
+	getter           *aclGetter
+
+	ctx       context.Context
+	ctxCancel context.CancelFunc
 }
 
 func (a *aclService) Init(ap *app.App) (err error) {
@@ -92,6 +105,46 @@ func (a *aclService) Init(ap *app.App) (err error) {
 	a.inviteService = app.MustComponent[inviteservice.InviteService](ap)
 	a.coordClient = app.MustComponent[coordinatorclient.CoordinatorClient](ap)
 	a.identityRepo = app.MustComponent[identityRepoClient](ap)
+	subService := app.MustComponent[subscription.Service](ap)
+	crossSub := app.MustComponent[crossspacesub.Service](ap)
+	wlt := app.MustComponent[wallet.Wallet](ap)
+	a.getter = newAclGetter(a.joiningClient, wlt.Account())
+	a.updater, err = newAclUpdater("acl-updater",
+		wlt.Account().SignKey.GetPublic().Account(),
+		crossSub,
+		subService,
+		a.spaceService.TechSpaceId(),
+		a,
+		1*time.Second,
+		30*time.Second,
+		10*time.Second)
+	if err != nil {
+		return err
+	}
+
+	a.ctx, a.ctxCancel = context.WithCancel(context.Background())
+	a.recordVerifier = recordverifier.New()
+	return nil
+}
+
+func (a *aclService) Run(_ context.Context) (err error) {
+	if a.updater != nil {
+		go func() {
+			err = a.updater.Run(a.ctx)
+			if err != nil {
+				log.With(zap.Error(err)).Error("acl updater run error")
+			}
+		}()
+	}
+	return nil
+}
+
+func (a *aclService) Close(ctx context.Context) (err error) {
+	a.ctxCancel()
+	if a.updater != nil {
+		// Close always waiting for Run to finish under the hood
+		return a.updater.Close()
+	}
 	return nil
 }
 
@@ -294,37 +347,24 @@ func (a *aclService) ApproveLeave(ctx context.Context, spaceId string, identitie
 	return a.Remove(ctx, spaceId, identities)
 }
 
-func (a *aclService) Leave(ctx context.Context, spaceId string) error {
-	removeSpace, err := a.spaceService.Get(ctx, spaceId)
+func (a *aclService) Leave(ctx context.Context, spaceId string) (err error) {
+	// all check are happening in acl updater
+	aclList, err := a.getter.GetOrRefreshAcl(ctx, spaceId)
 	if err != nil {
-		// space storage missing can occur only in case of missing space
-		if errors.Is(err, space.ErrSpaceStorageMissig) || errors.Is(err, space.ErrSpaceDeleted) {
-			return nil
-		}
-		return convertedOrSpaceErr(err)
+		return convertedOrAclRequestError(err)
 	}
-	identity := a.accountService.Keys().SignKey.GetPublic()
-	if !removeSpace.GetAclIdentity().Equals(identity) {
-		// this is a streamable space
-		// we exist there under ephemeral guest identity and should not remove it
-		return nil
-	}
-
-	cl := removeSpace.CommonSpace().AclClient()
-	err = cl.RequestSelfRemove(ctx)
-	if err != nil {
-		errs := []error{
-			list.ErrPendingRequest,
-			list.ErrIsOwner,
-			list.ErrNoSuchAccount,
-			coordinatorproto.ErrSpaceIsDeleted,
-			coordinatorproto.ErrSpaceNotExists,
-		}
-		for _, e := range errs {
-			if errors.Is(err, e) {
-				return nil
+	myIdentity := aclList.AclState().Identity()
+	defer func() {
+		for _, state := range aclList.AclState().CurrentAccounts() {
+			if state.PubKey.Equals(myIdentity) {
+				err = a.spaceService.TechSpace().DoSpaceView(ctx, spaceId, func(spaceView techspace.SpaceView) error {
+					return spaceView.SetMyParticipantStatus(domain.ConvertAclStatus(state.Status))
+				})
 			}
 		}
+	}()
+	err = a.joiningClient.RequestSelfRemove(ctx, spaceId, aclList)
+	if err != nil {
 		return convertedOrAclRequestError(err)
 	}
 	return nil
@@ -398,22 +438,7 @@ func (a *aclService) Join(ctx context.Context, spaceId, networkId string, invite
 	if err != nil {
 		return convertedOrInternalError("get invite payload", err)
 	}
-	if invitePayload.InviteType == model.InvitePayload_JoinAsGuest {
-		guestKey, err := crypto.UnmarshalEd25519PrivateKeyProto(invitePayload.GuestKey)
-		if err != nil {
-			return convertedOrInternalError("unmarshal invite key", err)
-		}
-		return a.joinAsGuest(ctx, invitePayload.SpaceId, guestKey)
-	}
-	inviteKey, err := crypto.UnmarshalEd25519PrivateKeyProto(invitePayload.AclKey)
-	if err != nil {
-		return convertedOrInternalError("unmarshal invite key", err)
-	}
-	aclHeadId, err := a.joiningClient.RequestJoin(ctx, spaceId, list.RequestJoinPayload{
-		InviteKey: inviteKey,
-		Metadata:  a.spaceService.AccountMetadataPayload(),
-	})
-	if err != nil {
+	onJoinError := func(err error) error {
 		if errors.Is(err, coordinatorproto.ErrSpaceIsDeleted) {
 			return space.ErrSpaceDeleted
 		}
@@ -429,16 +454,67 @@ func (a *aclService) Join(ctx context.Context, spaceId, networkId string, invite
 		}
 		return convertedOrAclRequestError(err)
 	}
-	err = a.spaceService.Join(ctx, spaceId, aclHeadId)
-	if err != nil {
-		return convertedOrInternalError("join space", err)
-	}
-	err = a.spaceService.TechSpace().SpaceViewSetData(ctx, spaceId,
-		domain.NewDetails().
-			SetString(bundle.RelationKeyName, invitePayload.SpaceName).
-			SetString(bundle.RelationKeyIconImage, invitePayload.SpaceIconCid))
-	if err != nil {
-		return convertedOrInternalError("set space data", err)
+	switch invitePayload.InviteType {
+	case model.InviteType_Guest:
+		guestKey, err := crypto.UnmarshalEd25519PrivateKeyProto(invitePayload.GuestKey)
+		if err != nil {
+			return convertedOrInternalError("unmarshal invite key", err)
+		}
+		return a.joinAsGuest(ctx, invitePayload.SpaceId, guestKey)
+	case model.InviteType_Member:
+		inviteKey, err := crypto.UnmarshalEd25519PrivateKeyProto(invitePayload.AclKey)
+		if err != nil {
+			return convertedOrInternalError("unmarshal invite key", err)
+		}
+		aclHeadId, err := a.joiningClient.RequestJoin(ctx, spaceId, list.RequestJoinPayload{
+			InviteKey: inviteKey,
+			Metadata:  a.spaceService.AccountMetadataPayload(),
+		})
+		// nolint: nestif
+		if err != nil {
+			return onJoinError(err)
+		}
+		err = a.spaceService.Join(ctx, spaceId, aclHeadId)
+		if err != nil {
+			return convertedOrInternalError("join space", err)
+		}
+		err = a.spaceService.TechSpace().SpaceViewSetData(ctx, spaceId,
+			domain.NewDetails().
+				SetString(bundle.RelationKeyName, invitePayload.SpaceName).
+				SetString(bundle.RelationKeyIconImage, invitePayload.SpaceIconCid))
+		if err != nil {
+			return convertedOrInternalError("set space data", err)
+		}
+	case model.InviteType_WithoutApprove:
+		inviteKey, err := crypto.UnmarshalEd25519PrivateKeyProto(invitePayload.AclKey)
+		if err != nil {
+			return convertedOrInternalError("unmarshal invite key", err)
+		}
+		aclHeadId, err := a.joiningClient.InviteJoin(ctx, spaceId, list.InviteJoinPayload{
+			InviteKey: inviteKey,
+			Metadata:  a.spaceService.AccountMetadataPayload(),
+		})
+		if errors.Is(err, coordinatorproto.ErrSpaceLimitReached) {
+			aclHeadId, err = a.joiningClient.InviteJoin(ctx, spaceId, list.InviteJoinPayload{
+				InviteKey:   inviteKey,
+				Metadata:    a.spaceService.AccountMetadataPayload(),
+				Permissions: list.AclPermissionsReader,
+			})
+		}
+		if err != nil {
+			return onJoinError(err)
+		}
+		err = a.spaceService.InviteJoin(ctx, spaceId, aclHeadId)
+		if err != nil {
+			return convertedOrInternalError("join space", err)
+		}
+		err = a.spaceService.TechSpace().SpaceViewSetData(ctx, spaceId,
+			domain.NewDetails().
+				SetString(bundle.RelationKeyName, invitePayload.SpaceName).
+				SetString(bundle.RelationKeyIconImage, invitePayload.SpaceIconCid))
+		if err != nil {
+			return convertedOrInternalError("set space data", err)
+		}
 	}
 	return nil
 }
@@ -472,12 +548,12 @@ func (a *aclService) ViewInvite(ctx context.Context, inviteCid cid.Cid, inviteFi
 	if err != nil {
 		return domain.InviteView{}, convertedOrAclRequestError(err)
 	}
-	lst, err := list.BuildAclListWithIdentity(a.accountService.Keys(), store, list.NoOpAcceptorVerifier{})
+	lst, err := list.BuildAclListWithIdentity(a.accountService.Keys(), store, a.recordVerifier)
 	if err != nil {
 		return domain.InviteView{}, convertedOrAclRequestError(err)
 	}
 	for _, inv := range lst.AclState().Invites() {
-		if inviteKey.GetPublic().Equals(inv) {
+		if inviteKey.GetPublic().Equals(inv.Key) {
 			return res, nil
 		}
 	}
@@ -533,26 +609,82 @@ func (a *aclService) GetCurrentInvite(ctx context.Context, spaceId string) (doma
 	return a.inviteService.GetCurrent(ctx, spaceId)
 }
 
-func (a *aclService) GenerateInvite(ctx context.Context, spaceId string) (result domain.InviteInfo, err error) {
+func (a *aclService) ChangeInvite(ctx context.Context, spaceId string, permissions model.ParticipantPermissions) (err error) {
 	if spaceId == a.accountService.PersonalSpaceID() {
 		err = ErrPersonalSpace
 		return
 	}
 	current, err := a.inviteService.GetCurrent(ctx, spaceId)
 	if err == nil {
-		return current, nil
+		if current.InviteType != domain.InviteTypeAnyone {
+			return inviteservice.ErrInviteNotExists
+		}
+	}
+	acceptSpace, err := a.spaceService.Get(ctx, spaceId)
+	if err != nil {
+		return convertedOrSpaceErr(err)
+	}
+	aclClient := acceptSpace.CommonSpace().AclClient()
+	acl := acceptSpace.CommonSpace().Acl()
+	acl.RLock()
+	invites := acl.AclState().Invites(aclrecordproto.AclInviteType_AnyoneCanJoin)
+	if len(invites) == 0 {
+		acl.RUnlock()
+		return inviteservice.ErrInviteNotExists
+	}
+	acl.RUnlock()
+	var (
+		invite            = invites[0]
+		invitePermissions = domain.ConvertParticipantPermissions(permissions)
+	)
+	if invite.Permissions == invitePermissions {
+		return ErrIncorrectPermissions
+	}
+	err = aclClient.ChangeInvitePermissions(ctx, invites[0].Id, invitePermissions)
+	if err != nil {
+		return convertedOrAclRequestError(err)
+	}
+	err = a.inviteService.Change(ctx, spaceId, invitePermissions)
+	if err != nil {
+		return convertedOrInternalError("change invite", err)
+	}
+	return nil
+}
+
+func (a *aclService) GenerateInvite(ctx context.Context, spaceId string, invType model.InviteType, permissions model.ParticipantPermissions) (result domain.InviteInfo, err error) {
+	if spaceId == a.accountService.PersonalSpaceID() {
+		err = ErrPersonalSpace
+		return
+	}
+	inviteType := domain.InviteType(invType)
+	current, err := a.inviteService.GetCurrent(ctx, spaceId)
+	if err == nil {
+		if current.InviteType == inviteType {
+			return current, nil
+		}
 	}
 	acceptSpace, err := a.spaceService.Get(ctx, spaceId)
 	if err != nil {
 		return
 	}
 	aclClient := acceptSpace.CommonSpace().AclClient()
-	res, err := aclClient.GenerateInvite()
+	aclPermissions := domain.ConvertParticipantPermissions(permissions)
+	invitePayload := aclclient.InvitePayload{
+		Permissions: aclPermissions,
+		InviteType:  domain.ConvertInviteType(inviteType),
+	}
+	res, err := aclClient.ReplaceInvite(ctx, invitePayload)
 	if err != nil {
 		err = convertedOrInternalError("couldn't generate acl invite", err)
 		return
 	}
-	return a.inviteService.Generate(ctx, spaceId, res.InviteKey, func() error {
+	params := inviteservice.GenerateInviteParams{
+		SpaceId:     spaceId,
+		Key:         res.InviteKey,
+		InviteType:  inviteType,
+		Permissions: aclPermissions,
+	}
+	return a.inviteService.Generate(ctx, params, func() error {
 		err := aclClient.AddRecord(ctx, res.InviteRec)
 		if err != nil {
 			return convertedOrAclRequestError(err)

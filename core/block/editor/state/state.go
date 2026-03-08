@@ -663,6 +663,10 @@ func (s *State) apply(spaceId string, fast, one, withLayouts bool) (msgs []simpl
 			action.Remove = append(action.Remove, s.PickOrigin(id).Copy())
 			delete(s.parent.blocks, id)
 		}
+	} else {
+		for _, id := range toRemove {
+			delete(s.blocks, id)
+		}
 	}
 	if s.parent != nil {
 		for _, b := range s.blocks {
@@ -2015,6 +2019,10 @@ func (s *State) GetDevice(id string) *model.DeviceInfo {
 // which will be unique and reproducible within the same space
 func (s *State) UniqueKeyInternal() string {
 	return s.uniqueKeyInternal
+}
+
+func (s *State) SetUniqueKeyInternal(key string) {
+	s.uniqueKeyInternal = key
 }
 
 func (s *State) OriginalCreatedTimestamp() int64 {

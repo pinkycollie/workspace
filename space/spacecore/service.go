@@ -11,7 +11,10 @@ import (
 	"github.com/anyproto/any-sync/app/logger"
 	"github.com/anyproto/any-sync/app/ocache"
 	"github.com/anyproto/any-sync/commonspace"
+	"github.com/anyproto/any-sync/commonspace/spacepayloads"
+
 	// nolint: misspell
+	"github.com/anyproto/any-sync/commonspace/clientspaceproto"
 	commonconfig "github.com/anyproto/any-sync/commonspace/config"
 	"github.com/anyproto/any-sync/commonspace/object/accountdata"
 	"github.com/anyproto/any-sync/commonspace/peermanager"
@@ -30,17 +33,15 @@ import (
 	"github.com/anyproto/anytype-heart/core/block/object/treesyncer"
 	"github.com/anyproto/anytype-heart/core/syncstatus/objectsyncstatus"
 	"github.com/anyproto/anytype-heart/core/wallet"
-	"github.com/anyproto/anytype-heart/space/spacecore/clientspaceproto"
+	"github.com/anyproto/anytype-heart/space/spacecore/keyvalueobserver"
 	"github.com/anyproto/anytype-heart/space/spacecore/localdiscovery"
 	"github.com/anyproto/anytype-heart/space/spacecore/peerstore"
 	"github.com/anyproto/anytype-heart/space/spacecore/storage"
+	"github.com/anyproto/anytype-heart/space/spacedomain"
 )
 
 const (
-	CName         = "client.space.spacecore"
-	SpaceType     = "anytype.space"
-	TechSpaceType = "anytype.techspace"
-	ChangeType    = "anytype.object"
+	CName = "client.space.spacecore"
 )
 
 var log = logger.NewNamed(CName)
@@ -63,9 +64,9 @@ type PoolManager interface {
 }
 
 type SpaceCoreService interface {
-	Create(ctx context.Context, replicationKey uint64, metadataPayload []byte) (*AnySpace, error)
-	Derive(ctx context.Context, spaceType string) (space *AnySpace, err error)
-	DeriveID(ctx context.Context, spaceType string) (id string, err error)
+	Create(ctx context.Context, spaceType spacedomain.SpaceType, replicationKey uint64, metadataPayload []byte) (*AnySpace, error)
+	Derive(ctx context.Context, spaceType spacedomain.SpaceType) (space *AnySpace, err error)
+	DeriveID(ctx context.Context, spaceType spacedomain.SpaceType) (id string, err error)
 	Delete(ctx context.Context, spaceId string) (err error)
 	Get(ctx context.Context, id string) (*AnySpace, error)
 	Pick(ctx context.Context, id string) (*AnySpace, error)
@@ -126,11 +127,11 @@ func (s *service) Run(ctx context.Context) (err error) {
 	return
 }
 
-func (s *service) Derive(ctx context.Context, spaceType string) (space *AnySpace, err error) {
-	payload := commonspace.SpaceDerivePayload{
+func (s *service) Derive(ctx context.Context, spaceType spacedomain.SpaceType) (space *AnySpace, err error) {
+	payload := spacepayloads.SpaceDerivePayload{
 		SigningKey: s.wallet.GetAccountPrivkey(),
 		MasterKey:  s.wallet.GetMasterKey(),
-		SpaceType:  spaceType,
+		SpaceType:  string(spaceType),
 	}
 	id, err := s.commonSpace.DeriveSpace(ctx, payload)
 	if err != nil {
@@ -148,26 +149,26 @@ func (s *service) CloseSpace(ctx context.Context, id string) error {
 	return err
 }
 
-func (s *service) DeriveID(ctx context.Context, spaceType string) (id string, err error) {
-	payload := commonspace.SpaceDerivePayload{
+func (s *service) DeriveID(ctx context.Context, spaceType spacedomain.SpaceType) (id string, err error) {
+	payload := spacepayloads.SpaceDerivePayload{
 		SigningKey: s.wallet.GetAccountPrivkey(),
 		MasterKey:  s.wallet.GetMasterKey(),
-		SpaceType:  spaceType,
+		SpaceType:  string(spaceType),
 	}
 	return s.commonSpace.DeriveId(ctx, payload)
 }
 
-func (s *service) Create(ctx context.Context, replicationKey uint64, metadataPayload []byte) (container *AnySpace, err error) {
+func (s *service) Create(ctx context.Context, spaceType spacedomain.SpaceType, replicationKey uint64, metadataPayload []byte) (container *AnySpace, err error) {
 	metadataPrivKey, _, err := crypto.GenerateRandomEd25519KeyPair()
 	if err != nil {
 		return nil, fmt.Errorf("generate metadata key: %w", err)
 	}
-	payload := commonspace.SpaceCreatePayload{
+	payload := spacepayloads.SpaceCreatePayload{
 		SigningKey:     s.wallet.GetAccountPrivkey(),
 		MasterKey:      s.wallet.GetMasterKey(),
 		ReadKey:        crypto.NewAES(),
 		MetadataKey:    metadataPrivKey,
-		SpaceType:      SpaceType,
+		SpaceType:      string(spaceType),
 		ReplicationKey: replicationKey,
 		Metadata:       metadataPayload,
 	}
@@ -228,10 +229,12 @@ func (s *service) Delete(ctx context.Context, spaceId string) (err error) {
 }
 
 func (s *service) loadSpace(ctx context.Context, id string) (value ocache.Object, err error) {
+	kvObserver := keyvalueobserver.New()
 	statusService := objectsyncstatus.NewSyncStatusService()
 	deps := commonspace.Deps{
 		TreeSyncer: treesyncer.NewTreeSyncer(id),
 		SyncStatus: statusService,
+		Indexer:    kvObserver,
 	}
 	if res, ok := ctx.Value(OptsKey).(Opts); ok && res.SignKey != nil {
 		// TODO: [stream] replace with real peer id
@@ -250,7 +253,7 @@ func (s *service) loadSpace(ctx context.Context, id string) (value ocache.Object
 	if err != nil {
 		return
 	}
-	ns, err := newAnySpace(cc)
+	ns, err := newAnySpace(cc, kvObserver)
 	if err != nil {
 		return
 	}
