@@ -1,0 +1,741 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>DeafAUTH</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --blue:   #2563eb;
+      --green:  #16a34a;
+      --orange: #ea580c;
+      --teal:   #0891b2;
+      --bg:     #f5f5f7;
+      --card:   #ffffff;
+      --text:   #111827;
+      --muted:  #6b7280;
+      --border: #e5e7eb;
+      --radius: 14px;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      min-height: 100dvh;
+      display: flex;
+      justify-content: center;
+    }
+
+    /* ── shell ── */
+    .shell {
+      width: 100%;
+      max-width: 420px;
+      min-height: 100dvh;
+      background: var(--bg);
+      display: flex;
+      flex-direction: column;
+      position: relative;
+    }
+
+    /* ── header ── */
+    header {
+      background: var(--card);
+      padding: .85rem 1.25rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 1px solid var(--border);
+      position: sticky;
+      top: 0;
+      z-index: 10;
+    }
+
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: .5rem;
+      font-size: 1.15rem;
+      font-weight: 800;
+      color: var(--blue);
+    }
+
+    .logo-icon {
+      width: 32px; height: 32px;
+      background: var(--blue);
+      border-radius: 8px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 1rem;
+    }
+
+    .menu-btn {
+      background: none; border: none; cursor: pointer;
+      font-size: 1.4rem; color: var(--text); padding: .2rem;
+    }
+
+    /* ── content ── */
+    .content {
+      flex: 1;
+      padding: 1.25rem;
+      overflow-y: auto;
+      padding-bottom: 6rem;
+    }
+
+    h1 { font-size: 1.4rem; font-weight: 800; margin-bottom: 1rem; }
+
+    /* ── action buttons ── */
+    .action-btn {
+      width: 100%;
+      border: none;
+      border-radius: var(--radius);
+      padding: 1.1rem 1.25rem;
+      cursor: pointer;
+      text-align: center;
+      margin-bottom: .75rem;
+      transition: opacity .15s, transform .1s;
+    }
+
+    .action-btn:active { transform: scale(.98); opacity: .85; }
+
+    .action-btn.blue  { background: var(--blue);  color: #fff; }
+    .action-btn.green { background: var(--green); color: #fff; }
+
+    .action-btn .btn-label {
+      display: block;
+      font-size: 1rem;
+      font-weight: 700;
+      margin-bottom: .3rem;
+    }
+
+    .endpoint {
+      display: inline-flex;
+      align-items: center;
+      gap: .3rem;
+      font-size: .72rem;
+      font-weight: 600;
+    }
+
+    .method {
+      padding: 1px 6px;
+      border-radius: 4px;
+      font-size: .65rem;
+      font-weight: 800;
+    }
+
+    .method-post { background: #fde68a; color: #92400e; }
+    .method-get  { background: #bbf7d0; color: #065f46; }
+    .method-patch{ background: #ddd6fe; color: #4c1d95; }
+
+    /* ── profile card ── */
+    .profile-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 1rem 1.25rem;
+      display: flex;
+      align-items: center;
+      gap: .9rem;
+      margin-bottom: 1.25rem;
+      cursor: pointer;
+      transition: box-shadow .15s;
+    }
+
+    .profile-card:hover { box-shadow: 0 2px 12px #0001; }
+
+    .avatar {
+      width: 48px; height: 48px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, #f97316, #ec4899);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 1.3rem; flex-shrink: 0;
+    }
+
+    .profile-info .name { font-weight: 700; font-size: .95rem; }
+    .profile-info .uid  { font-size: .75rem; color: var(--muted); margin: .1rem 0 .3rem; }
+
+    /* ── section title ── */
+    .section-title {
+      font-size: .95rem;
+      font-weight: 700;
+      margin-bottom: .75rem;
+      color: var(--text);
+    }
+
+    /* ── service cards ── */
+    .service-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 1rem 1.25rem;
+      display: flex;
+      align-items: center;
+      gap: .9rem;
+      margin-bottom: .65rem;
+      cursor: pointer;
+      transition: box-shadow .15s, transform .1s;
+    }
+
+    .service-card:active { transform: scale(.98); }
+    .service-card:hover  { box-shadow: 0 2px 12px #0001; }
+
+    .service-icon {
+      width: 44px; height: 44px;
+      border-radius: 12px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 1.3rem; flex-shrink: 0;
+    }
+
+    .icon-orange { background: #fff7ed; }
+    .icon-teal   { background: #ecfeff; }
+    .icon-purple { background: #faf5ff; }
+    .icon-green  { background: #f0fdf4; }
+
+    .service-info .svc-name { font-weight: 700; font-size: .9rem; margin-bottom: .25rem; }
+
+    /* ── modal overlay ── */
+    .overlay {
+      display: none;
+      position: fixed; inset: 0;
+      background: #0008; z-index: 50;
+      align-items: flex-end; justify-content: center;
+    }
+
+    .overlay.open { display: flex; }
+
+    .sheet {
+      background: var(--card);
+      border-radius: 20px 20px 0 0;
+      width: 100%; max-width: 420px;
+      padding: 1.5rem 1.25rem 2rem;
+      animation: slide-up .25s ease;
+    }
+
+    @keyframes slide-up {
+      from { transform: translateY(100%); }
+      to   { transform: translateY(0); }
+    }
+
+    .sheet h2 { font-size: 1.1rem; font-weight: 800; margin-bottom: 1.25rem; }
+
+    .field { margin-bottom: .9rem; }
+    .field label { display: block; font-size: .78rem; color: var(--muted); margin-bottom: .3rem; font-weight: 600; }
+
+    .field input, .field select, .field textarea {
+      width: 100%;
+      border: 1.5px solid var(--border);
+      border-radius: 10px;
+      padding: .6rem .85rem;
+      font-size: .9rem;
+      outline: none;
+      background: #fafafa;
+      color: var(--text);
+    }
+
+    .field input:focus, .field select:focus, .field textarea:focus {
+      border-color: var(--blue);
+      background: #fff;
+    }
+
+    .sheet-actions { display: flex; gap: .65rem; margin-top: 1.25rem; }
+
+    .btn {
+      flex: 1; padding: .7rem; border-radius: 10px; border: none;
+      font-size: .9rem; font-weight: 700; cursor: pointer;
+    }
+
+    .btn-submit   { background: var(--blue);  color: #fff; }
+    .btn-submit.green { background: var(--green); }
+    .btn-submit.orange{ background: var(--orange); }
+    .btn-submit.teal  { background: var(--teal); }
+    .btn-cancel   { background: var(--border); color: var(--text); flex: 0 0 auto; padding: .7rem 1.2rem; }
+
+    /* ── response box ── */
+    .response {
+      margin-top: 1rem;
+      background: #0a0a15;
+      border-radius: 10px;
+      padding: .85rem 1rem;
+      font-family: 'Courier New', monospace;
+      font-size: .75rem;
+      color: #4fde8e;
+      max-height: 220px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      display: none;
+    }
+
+    .response.show { display: block; }
+
+    /* ── status pill ── */
+    .status-pill {
+      display: inline-block;
+      padding: 2px 10px; border-radius: 20px; font-size: .7rem; font-weight: 700;
+    }
+    .pill-ok  { background: #dcfce7; color: #166534; }
+    .pill-err { background: #fee2e2; color: #991b1b; }
+
+    /* ── bottom nav ── */
+    nav {
+      position: fixed;
+      bottom: 0;
+      width: 100%;
+      max-width: 420px;
+      background: var(--card);
+      border-top: 1px solid var(--border);
+      display: flex;
+      justify-content: space-around;
+      padding: .6rem 0 .9rem;
+      z-index: 10;
+    }
+
+    .nav-item {
+      display: flex; flex-direction: column; align-items: center; gap: .2rem;
+      font-size: .65rem; color: var(--muted); cursor: pointer;
+      transition: color .15s;
+    }
+
+    .nav-item.active { color: var(--blue); }
+    .nav-item .nav-icon { font-size: 1.3rem; }
+
+    /* ── toast ── */
+    #toast {
+      position: fixed; bottom: 5.5rem; left: 50%; transform: translateX(-50%);
+      background: #111; color: #fff; padding: .55rem 1.25rem;
+      border-radius: 999px; font-size: .82rem; font-weight: 600;
+      opacity: 0; transition: opacity .3s; pointer-events: none; white-space: nowrap;
+      z-index: 100;
+    }
+
+    #toast.show { opacity: 1; }
+  </style>
+</head>
+<body>
+<div class="shell">
+
+  <!-- Header -->
+  <header>
+    <div class="logo">
+      <div class="logo-icon">🔐</div>
+      DeafAuth
+    </div>
+    <button class="menu-btn" onclick="showToast('Menu coming soon')">☰</button>
+  </header>
+
+  <!-- Content -->
+  <div class="content">
+    <h1>DeafAuth Services Hub</h1>
+
+    <!-- Primary actions -->
+    <button class="action-btn blue" onclick="open('verify')">
+      <span class="btn-label">Verify Identity</span>
+      <span class="endpoint">
+        <span class="method method-post">POST</span>
+        /auth/verify
+      </span>
+    </button>
+
+    <button class="action-btn green" onclick="open('register')">
+      <span class="btn-label">Create Account</span>
+      <span class="endpoint">
+        <span class="method method-post">POST</span>
+        /auth/register
+      </span>
+    </button>
+
+    <!-- Profile card -->
+    <div class="profile-card" onclick="open('profile')">
+      <div class="avatar">👩</div>
+      <div class="profile-info">
+        <div class="name" id="profileName">Jane Doe</div>
+        <div class="uid" id="profileId">ID: DA-882-JD</div>
+        <span class="endpoint">
+          <span class="method method-get">GET</span>
+          /auth/profile/:userId
+        </span>
+      </div>
+    </div>
+
+    <!-- Specialized services -->
+    <div class="section-title">Specialized Services</div>
+
+    <div class="service-card" onclick="open('deaf-verify')">
+      <div class="service-icon icon-orange">🤟</div>
+      <div class="service-info">
+        <div class="svc-name">Deaf Verification</div>
+        <span class="endpoint">
+          <span class="method method-post">POST</span>
+          /auth/verify-deaf
+        </span>
+      </div>
+    </div>
+
+    <div class="service-card" onclick="open('accessibility')">
+      <div class="service-icon icon-teal">👁️</div>
+      <div class="service-info">
+        <div class="svc-name">Accessibility Profile</div>
+        <span class="endpoint">
+          <span class="method method-post">POST</span>
+          /auth/accessibility-profile
+        </span>
+      </div>
+    </div>
+
+    <div class="service-card" onclick="open('broadcast')">
+      <div class="service-icon icon-purple">📣</div>
+      <div class="service-info">
+        <div class="svc-name">Broadcast Banner</div>
+        <span class="endpoint">
+          <span class="method method-post">POST</span>
+          /api/broadcast
+        </span>
+      </div>
+    </div>
+
+    <div class="service-card" onclick="open('stream')">
+      <div class="service-icon icon-green">📡</div>
+      <div class="service-info">
+        <div class="svc-name">Live Stream</div>
+        <span class="endpoint">
+          <span class="method method-get">GET</span>
+          /api/stream
+        </span>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Bottom nav -->
+  <nav>
+    <div class="nav-item active"><span class="nav-icon">⊞</span>Dashboard</div>
+    <div class="nav-item" onclick="showToast('Services')"><span class="nav-icon">⚡</span>Services</div>
+    <div class="nav-item" onclick="showToast('Messages')"><span class="nav-icon">💬</span>Messages</div>
+    <div class="nav-item" onclick="open('profile')"><span class="nav-icon">👤</span>Profile</div>
+    <div class="nav-item" onclick="showToast('Settings')"><span class="nav-icon">⚙️</span>Settings</div>
+  </nav>
+</div>
+
+<!-- ── MODALS ── -->
+
+<!-- Verify Identity -->
+<div class="overlay" id="modal-verify" onclick="closeOnBg(event,'verify')">
+  <div class="sheet">
+    <h2>🔐 Verify Identity</h2>
+    <div class="field"><label>Token</label><input id="v-token" placeholder="Bearer token" /></div>
+    <div class="response" id="v-res"></div>
+    <div class="sheet-actions">
+      <button class="btn btn-cancel" onclick="close('verify')">Cancel</button>
+      <button class="btn btn-submit" onclick="call('verify')">Verify →</button>
+    </div>
+  </div>
+</div>
+
+<!-- Register -->
+<div class="overlay" id="modal-register" onclick="closeOnBg(event,'register')">
+  <div class="sheet">
+    <h2>✅ Create Account</h2>
+    <div class="field"><label>Full Name</label><input id="r-name" placeholder="Jane Doe" /></div>
+    <div class="field"><label>Email</label><input id="r-email" type="email" placeholder="jane@example.com" /></div>
+    <div class="field"><label>Password</label><input id="r-pass" type="password" placeholder="••••••••" /></div>
+    <div class="field"><label>Sign Language</label>
+      <select id="r-lang">
+        <option>ASL</option><option>BSL</option><option>Auslan</option>
+        <option>LSF</option><option>DGS</option><option>ISL</option>
+      </select>
+    </div>
+    <div class="response" id="r-res"></div>
+    <div class="sheet-actions">
+      <button class="btn btn-cancel" onclick="close('register')">Cancel</button>
+      <button class="btn btn-submit green" onclick="call('register')">Create →</button>
+    </div>
+  </div>
+</div>
+
+<!-- Profile -->
+<div class="overlay" id="modal-profile" onclick="closeOnBg(event,'profile')">
+  <div class="sheet">
+    <h2>👤 Get Profile</h2>
+    <div class="field"><label>User ID</label><input id="p-id" placeholder="DA-882-JD" /></div>
+    <div class="response" id="p-res"></div>
+    <div class="sheet-actions">
+      <button class="btn btn-cancel" onclick="close('profile')">Cancel</button>
+      <button class="btn btn-submit" onclick="call('profile')">Fetch →</button>
+    </div>
+  </div>
+</div>
+
+<!-- Deaf Verification -->
+<div class="overlay" id="modal-deaf-verify" onclick="closeOnBg(event,'deaf-verify')">
+  <div class="sheet">
+    <h2>🤟 Deaf Verification</h2>
+    <div class="field"><label>User ID</label><input id="dv-id" placeholder="DA-882-JD" /></div>
+    <div class="field"><label>Verification Type</label>
+      <select id="dv-type">
+        <option value="community">Community</option>
+        <option value="professional">Professional</option>
+        <option value="document">Document</option>
+      </select>
+    </div>
+    <div class="response" id="dv-res"></div>
+    <div class="sheet-actions">
+      <button class="btn btn-cancel" onclick="close('deaf-verify')">Cancel</button>
+      <button class="btn btn-submit orange" onclick="call('deaf-verify')">Verify →</button>
+    </div>
+  </div>
+</div>
+
+<!-- Accessibility Profile -->
+<div class="overlay" id="modal-accessibility" onclick="closeOnBg(event,'accessibility')">
+  <div class="sheet">
+    <h2>👁️ Accessibility Profile</h2>
+    <div class="field"><label>User ID</label><input id="a-id" placeholder="DA-882-JD" /></div>
+    <div class="field"><label>Caption Size</label>
+      <select id="a-caption">
+        <option value="small">Small</option>
+        <option value="medium">Medium</option>
+        <option value="large" selected>Large</option>
+      </select>
+    </div>
+    <div class="field"><label>Visual Alerts</label>
+      <select id="a-visual">
+        <option value="true">Enabled</option>
+        <option value="false">Disabled</option>
+      </select>
+    </div>
+    <div class="field"><label>Flash Alerts</label>
+      <select id="a-flash">
+        <option value="true">Enabled</option>
+        <option value="false">Disabled</option>
+      </select>
+    </div>
+    <div class="response" id="a-res"></div>
+    <div class="sheet-actions">
+      <button class="btn btn-cancel" onclick="close('accessibility')">Cancel</button>
+      <button class="btn btn-submit teal" onclick="call('accessibility')">Save →</button>
+    </div>
+  </div>
+</div>
+
+<!-- Broadcast -->
+<div class="overlay" id="modal-broadcast" onclick="closeOnBg(event,'broadcast')">
+  <div class="sheet">
+    <h2>📣 Send Broadcast</h2>
+    <div class="field"><label>API Key</label><input id="bc-key" type="password" placeholder="Your API_KEY" /></div>
+    <div class="field"><label>Message</label>
+      <textarea id="bc-msg" placeholder="What do you want to broadcast?"></textarea>
+    </div>
+    <div class="field"><label>Level</label>
+      <select id="bc-level">
+        <option value="info">ℹ️ Info</option>
+        <option value="warning">⚠️ Warning</option>
+        <option value="critical">🚨 Critical</option>
+      </select>
+    </div>
+    <div class="field"><label>Sign Language (optional)</label>
+      <input id="bc-lang" placeholder="ASL, BSL…" />
+    </div>
+    <div class="response" id="bc-res"></div>
+    <div class="sheet-actions">
+      <button class="btn btn-cancel" onclick="close('broadcast')">Cancel</button>
+      <button class="btn btn-submit" onclick="call('broadcast')">Send →</button>
+    </div>
+  </div>
+</div>
+
+<!-- Stream -->
+<div class="overlay" id="modal-stream" onclick="closeOnBg(event,'stream')">
+  <div class="sheet">
+    <h2>📡 Live Stream</h2>
+    <p style="font-size:.85rem;color:#6b7280;margin-bottom:1rem">
+      Listening for broadcasts from the server…
+    </p>
+    <div class="response show" id="s-res" style="color:#4f8ede">Connecting…</div>
+    <div class="sheet-actions">
+      <button class="btn btn-cancel" onclick="stopStream();close('stream')">Disconnect</button>
+    </div>
+  </div>
+</div>
+
+<!-- Toast -->
+<div id="toast"></div>
+
+<script type="module">
+  // ── BASE URL ──────────────────────────────
+  const BASE = window.location.origin;
+
+  // ── MODAL HELPERS ─────────────────────────
+  window.open = id => {
+    document.getElementById(`modal-${id}`).classList.add('open');
+    if (id === 'stream') startStream();
+  };
+
+  window.close = id => {
+    document.getElementById(`modal-${id}`).classList.remove('open');
+    const res = document.getElementById(`${id.slice(0,2)}-res`) ||
+                document.getElementById(`${id}-res`);
+    if (res) { res.textContent = ''; res.classList.remove('show'); }
+  };
+
+  window.closeOnBg = (e, id) => {
+    if (e.target === e.currentTarget) close(id);
+  };
+
+  // ── TOAST ─────────────────────────────────
+  window.showToast = msg => {
+    const t = document.getElementById('toast');
+    t.textContent = msg;
+    t.classList.add('show');
+    setTimeout(() => t.classList.remove('show'), 2200);
+  };
+
+  // ── SHOW RESPONSE ─────────────────────────
+  function showRes(elId, status, data) {
+    const el = document.getElementById(elId);
+    el.textContent = JSON.stringify(data, null, 2);
+    el.classList.add('show');
+
+    const pill = document.createElement('span');
+    pill.className = `status-pill ${status < 300 ? 'pill-ok' : 'pill-err'}`;
+    pill.textContent = status < 300 ? `${status} OK` : `${status} Error`;
+    el.prepend(pill, '\n');
+  }
+
+  // ── API CALLS ─────────────────────────────
+  window.call = async action => {
+    try {
+      let res, body;
+
+      switch (action) {
+
+        case 'verify': {
+          const token = document.getElementById('v-token').value.trim();
+          res = await fetch(`${BASE}/auth/verify`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ token }),
+          });
+          showRes('v-res', res.status, await res.json());
+          break;
+        }
+
+        case 'register': {
+          body = {
+            name:     document.getElementById('r-name').value.trim(),
+            email:    document.getElementById('r-email').value.trim(),
+            password: document.getElementById('r-pass').value,
+            signLang: document.getElementById('r-lang').value,
+          };
+          res = await fetch(`${BASE}/auth/register`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+          });
+          const data = await res.json();
+          showRes('r-res', res.status, data);
+          if (res.ok) {
+            document.getElementById('profileName').textContent = body.name;
+            document.getElementById('profileId').textContent   = `ID: ${data.id || 'DA-???'}`;
+            showToast('Account created ✅');
+          }
+          break;
+        }
+
+        case 'profile': {
+          const uid = document.getElementById('p-id').value.trim();
+          res = await fetch(`${BASE}/auth/profile/${uid}`);
+          showRes('p-res', res.status, await res.json());
+          break;
+        }
+
+        case 'deaf-verify': {
+          body = {
+            userId:           document.getElementById('dv-id').value.trim(),
+            verificationType: document.getElementById('dv-type').value,
+          };
+          res = await fetch(`${BASE}/auth/verify-deaf`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+          });
+          showRes('dv-res', res.status, await res.json());
+          break;
+        }
+
+        case 'accessibility': {
+          body = {
+            userId:       document.getElementById('a-id').value.trim(),
+            captionSize:  document.getElementById('a-caption').value,
+            visualAlerts: document.getElementById('a-visual').value === 'true',
+            flashAlerts:  document.getElementById('a-flash').value === 'true',
+          };
+          res = await fetch(`${BASE}/auth/accessibility-profile`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+          });
+          showRes('a-res', res.status, await res.json());
+          break;
+        }
+
+        case 'broadcast': {
+          const key = document.getElementById('bc-key').value.trim();
+          body = {
+            message:  document.getElementById('bc-msg').value.trim(),
+            level:    document.getElementById('bc-level').value,
+            signLang: document.getElementById('bc-lang').value.trim() || null,
+            author:   'DeafAUTH Hub',
+          };
+          res = await fetch(`${BASE}/api/broadcast`, {
+            method: 'POST',
+            headers: {
+              'Content-Type':  'application/json',
+              'Authorization': `Bearer ${key}`,
+            },
+            body: JSON.stringify(body),
+          });
+          showRes('bc-res', res.status, await res.json());
+          if (res.ok) showToast('Broadcast sent 📣');
+          break;
+        }
+      }
+    } catch (e) {
+      showToast('Error: ' + e.message);
+    }
+  };
+
+  // ── SSE STREAM ────────────────────────────
+  let es = null;
+
+  window.startStream = () => {
+    const el = document.getElementById('s-res');
+    el.textContent = `Connected to ${BASE}/api/stream\n\nWaiting for events…\n`;
+
+    es = new EventSource(`${BASE}/api/stream`);
+
+    es.addEventListener('banner', e => {
+      const bc = JSON.parse(e.data);
+      el.textContent += `\n[${bc.level.toUpperCase()}] ${bc.message}`;
+      el.scrollTop = el.scrollHeight;
+    });
+
+    es.addEventListener('history', e => {
+      const items = JSON.parse(e.data);
+      el.textContent += `\n— ${items.length} recent broadcast(s) loaded —`;
+    });
+
+    es.addEventListener('error', () => {
+      el.textContent += '\n⚠ Connection lost. Reconnecting…';
+    });
+  };
+
+  window.stopStream = () => {
+    if (es) { es.close(); es = null; }
+  };
+</script>
+
+<!-- DeafAUTH broadcast banner on this page too -->
+<script src="/banner.js"></script>
+
+</body>
+</html>
